@@ -3,9 +3,11 @@ package grafsy
 import (
 	"bufio"
 	"net"
+	"os"
 	"path"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -254,5 +256,141 @@ func TestClient_tryToSendToGraphite(t *testing.T) {
 		if received != testMetrics[i] {
 			t.Error("Received something different than sent")
 		}
+	}
+}
+
+func TestConfig_PrepareEnvironment(t *testing.T) {
+	// Create a temporary directory for testing
+	tempDir := t.TempDir()
+
+	// Test case 1: Directory doesn't exist - should create with 777 permissions
+	testConf := &Config{
+		MetricDir:   path.Join(tempDir, "test_metrics"),
+		Log:         "-", // Use stdout to avoid log file issues
+		CarbonAddrs: []string{"localhost:2003"},
+		UseACL:      false,
+	}
+
+	// Ensure directory doesn't exist initially
+	if _, err := os.Stat(testConf.MetricDir); !os.IsNotExist(err) {
+		t.Fatalf("Test directory should not exist initially")
+	}
+
+	// Call prepareEnvironment
+	err := testConf.prepareEnvironment()
+	if err != nil {
+		t.Fatalf("prepareEnvironment failed: %v", err)
+	}
+
+	// Check that directory was created
+	info, err := os.Stat(testConf.MetricDir)
+	if err != nil {
+		t.Fatalf("Directory was not created: %v", err)
+	}
+
+	// Verify it's a directory
+	if !info.IsDir() {
+		t.Fatalf("Created path is not a directory")
+	}
+
+	// Check permissions - should be 777 with sticky bit (01777)
+	expectedPerms := os.FileMode(0777 | os.ModeSticky)
+	actualPerms := info.Mode().Perm() | (info.Mode() & os.ModeSticky)
+	if actualPerms != expectedPerms {
+		t.Errorf("Wrong permissions: expected %o, got %o", expectedPerms, actualPerms)
+	}
+
+	// Test case 2: Directory exists - should chmod to 777 permissions
+	testConf2 := &Config{
+		MetricDir:   path.Join(tempDir, "existing_metrics"),
+		Log:         "-",
+		CarbonAddrs: []string{"localhost:2003"},
+		UseACL:      false,
+	}
+
+	// Create directory with wrong permissions first
+	err = os.MkdirAll(testConf2.MetricDir, 0755)
+	if err != nil {
+		t.Fatalf("Failed to create test directory: %v", err)
+	}
+
+	// Verify it has wrong permissions initially
+	info, err = os.Stat(testConf2.MetricDir)
+	if err != nil {
+		t.Fatalf("Failed to stat existing directory: %v", err)
+	}
+
+	initialPerms := info.Mode().Perm()
+	if initialPerms == (0777 | os.ModeSticky) {
+		t.Fatalf("Directory already has correct permissions, test invalid")
+	}
+
+	// Call prepareEnvironment
+	err = testConf2.prepareEnvironment()
+	if err != nil {
+		t.Fatalf("prepareEnvironment failed on existing directory: %v", err)
+	}
+
+	// Check that permissions were fixed
+	info, err = os.Stat(testConf2.MetricDir)
+	if err != nil {
+		t.Fatalf("Failed to stat directory after prepareEnvironment: %v", err)
+	}
+
+	actualPerms = info.Mode().Perm() | (info.Mode() & os.ModeSticky)
+	if actualPerms != expectedPerms {
+		t.Errorf("Permissions not fixed: expected %o, got %o", expectedPerms, actualPerms)
+	}
+
+	// Test case 3: Test with UseACL enabled (should still work with noacl build)
+	testConf3 := &Config{
+		MetricDir:   path.Join(tempDir, "acl_metrics"),
+		Log:         "-",
+		CarbonAddrs: []string{"localhost:2003"},
+		UseACL:      true, // This will call setACL
+	}
+
+	err = testConf3.prepareEnvironment()
+	if err != nil {
+		t.Fatalf("prepareEnvironment failed with UseACL=true: %v", err)
+	}
+
+	// Verify directory was created with correct permissions
+	info, err = os.Stat(testConf3.MetricDir)
+	if err != nil {
+		t.Fatalf("Directory was not created with UseACL=true: %v", err)
+	}
+
+	actualPerms = info.Mode().Perm() | (info.Mode() & os.ModeSticky)
+	if actualPerms != expectedPerms {
+		t.Errorf("Wrong permissions with UseACL=true: expected %o, got %o", expectedPerms, actualPerms)
+	}
+
+	// Test case 4: Test umask doesn't interfere
+	// Save current umask and set a restrictive one
+	oldUmask := syscall.Umask(0077) // Very restrictive umask
+	defer syscall.Umask(oldUmask)   // Restore original umask
+
+	testConf4 := &Config{
+		MetricDir:   path.Join(tempDir, "umask_test"),
+		Log:         "-",
+		CarbonAddrs: []string{"localhost:2003"},
+		UseACL:      false,
+	}
+
+	err = testConf4.prepareEnvironment()
+	if err != nil {
+		t.Fatalf("prepareEnvironment failed with restrictive umask: %v", err)
+	}
+
+	// Even with restrictive umask, should still get 777 permissions
+	info, err = os.Stat(testConf4.MetricDir)
+	if err != nil {
+		t.Fatalf("Directory was not created with restrictive umask: %v", err)
+	}
+
+	actualPerms = info.Mode().Perm() | (info.Mode() & os.ModeSticky)
+	if actualPerms != expectedPerms {
+		t.Errorf("Umask interfered with permissions: expected %o, got %o", expectedPerms, actualPerms)
 	}
 }

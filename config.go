@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/pkg/errors"
@@ -179,9 +180,18 @@ func (conf *Config) prepareEnvironment() error {
 	*/
 
 	if _, err := os.Stat(conf.MetricDir); os.IsNotExist(err) {
-		os.MkdirAll(conf.MetricDir, 0777|os.ModeSticky)
+		// Temporarily set umask to 0 to ensure 777 permissions
+		oldUmask := syscall.Umask(0)
+		err = os.MkdirAll(conf.MetricDir, 0777|os.ModeSticky)
+		syscall.Umask(oldUmask) // Restore original umask
+		if err != nil {
+			return errors.Wrap(err, "Failed to create MetricDir: "+conf.MetricDir)
+		}
 	} else {
-		os.Chmod(conf.MetricDir, 0777|os.ModeSticky)
+		err = os.Chmod(conf.MetricDir, 0777|os.ModeSticky)
+		if err != nil {
+			return errors.Wrap(err, "Failed to chmod MetricDir: "+conf.MetricDir)
+		}
 	}
 
 	/*
