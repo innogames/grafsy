@@ -179,9 +179,21 @@ func (conf *Config) prepareEnvironment() error {
 	*/
 
 	if _, err := os.Stat(conf.MetricDir); os.IsNotExist(err) {
-		os.MkdirAll(conf.MetricDir, 0777|os.ModeSticky)
+		// Create directory with default permissions first
+		err = os.MkdirAll(conf.MetricDir, os.ModePerm)
+		if err != nil {
+			return errors.Wrap(err, "Failed to create MetricDir: "+conf.MetricDir)
+		}
+		// Then explicitly set the desired permissions to avoid issues with umask
+		err = os.Chmod(conf.MetricDir, 0777|os.ModeSticky)
+		if err != nil {
+			return errors.Wrap(err, "Failed to chmod MetricDir after creation: "+conf.MetricDir)
+		}
 	} else {
-		os.Chmod(conf.MetricDir, 0777|os.ModeSticky)
+		err = os.Chmod(conf.MetricDir, 0777|os.ModeSticky)
+		if err != nil {
+			return errors.Wrap(err, "Failed to chmod MetricDir: "+conf.MetricDir)
+		}
 	}
 
 	/*
